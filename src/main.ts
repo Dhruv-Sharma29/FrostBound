@@ -3,5 +3,6 @@ import { Game } from './game/core/Game';
 
 const container = document.querySelector<HTMLDivElement>('#app')!;
 
-const game = new Game(container);
-game.start();
+Game.create(container)
+  .then((game) => game.start())
+  .catch((error: unknown) => console.error('FrostBound failed to start:', error));

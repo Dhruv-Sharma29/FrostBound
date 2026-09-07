@@ -17,8 +17,17 @@ export class Game {
   private readonly input: InputManager;
   private readonly player: Player;
 
-  constructor(container: HTMLElement) {
+  /**
+   * The terrain GLB is fetched before the Game exists, so every field can
+   * be assigned once and the loop never runs against a half-built world.
+   */
+  static async create(container: HTMLElement): Promise<Game> {
+    return new Game(container, await Terrain.load());
+  }
+
+  private constructor(container: HTMLElement, terrain: Terrain) {
     this.scene = createScene();
+    this.scene.add(terrain.root);
 
     this.camera = new THREE.PerspectiveCamera(
       75,
@@ -31,12 +40,15 @@ export class Game {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Sunlit snow is bright enough to clip to flat white, which would throw
+    // away the shading the lighting exists to produce. Tone mapping rolls the
+    // highlights off instead, keeping the relief visible.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     container.appendChild(this.renderer.domElement);
 
-    new Terrain(this.scene);
     this.input = new InputManager(this.renderer.domElement);
-    this.player = new Player(this.scene, this.camera);
+    this.player = new Player(this.scene, this.camera, terrain);
 
     window.addEventListener('resize', this.onResize);
   }

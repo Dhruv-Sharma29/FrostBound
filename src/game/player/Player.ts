@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { InputManager } from '../input/InputManager';
+import type { GroundSampler } from '../world/GroundSampler';
 import { PLAYER_BODY_LAYER } from '../core/layers';
 
 const EYE_HEIGHT = 1.6;
@@ -8,7 +9,9 @@ const CAPSULE_LENGTH = 1.0;
 const MOVE_SPEED = 5; // meters/second
 const MOUSE_SENSITIVITY = 0.0025;
 const MAX_PITCH = Math.PI / 2 - 0.01;
-const GROUND_Y = 0;
+const SPAWN_X = 0;
+const SPAWN_Z = 5;
+const FALLBACK_GROUND_Y = 0;
 
 /**
  * Player rig, following the classic FPS controller split:
@@ -25,9 +28,15 @@ const GROUND_Y = 0;
 export class Player {
   private readonly yawObject = new THREE.Object3D();
   private readonly pitchObject = new THREE.Object3D();
+  private readonly ground: GroundSampler;
 
-  constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
-    this.yawObject.position.set(0, GROUND_Y, 5);
+  constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, ground: GroundSampler) {
+    this.ground = ground;
+
+    // Spawn standing on the surface rather than at an assumed height —
+    // the terrain's elevation at the spawn point isn't known up front.
+    const spawnY = ground.sampleHeight(SPAWN_X, SPAWN_Z) ?? FALLBACK_GROUND_Y;
+    this.yawObject.position.set(SPAWN_X, spawnY, SPAWN_Z);
 
     this.pitchObject.position.set(0, EYE_HEIGHT, 0);
     camera.position.set(0, 0, 0);
@@ -52,7 +61,6 @@ export class Player {
   update(delta: number, input: InputManager): void {
     this.applyMouseLook(input);
     this.applyMovement(delta, input);
-    this.applyGroundClamp();
   }
 
   private applyMouseLook(input: InputManager): void {
@@ -77,16 +85,20 @@ export class Player {
 
     if (direction.lengthSq() === 0) return;
 
-    // Rotate the input vector by yaw only, so movement stays flat on the
-    // ground regardless of camera pitch.
+    // Rotate the input vector by yaw only, so movement is driven by where
+    // the player faces, not by camera pitch, and stays horizontal.
     direction.normalize().applyQuaternion(this.yawObject.quaternion);
-    this.yawObject.position.addScaledVector(direction, MOVE_SPEED * delta);
-  }
 
-  private applyGroundClamp(): void {
-    // Terrain is flat for this milestone, so "gravity" is just snapping
-    // the player back to ground level. Swap for a raycast-against-terrain
-    // step once height variation exists.
-    this.yawObject.position.y = GROUND_Y;
+    const distance = MOVE_SPEED * delta;
+    const nextX = this.yawObject.position.x + direction.x * distance;
+    const nextZ = this.yawObject.position.z + direction.z * distance;
+
+    // Walking is a horizontal step plus a snap onto whatever surface is
+    // below it. No falling body is simulated, so the step is simply
+    // refused where the terrain runs out.
+    const groundY = this.ground.sampleHeight(nextX, nextZ);
+    if (groundY === null) return;
+
+    this.yawObject.position.set(nextX, groundY, nextZ);
   }
 }
