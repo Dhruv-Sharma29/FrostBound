@@ -1,8 +1,16 @@
 import * as THREE from 'three';
 import { createScene } from '../scene/SceneManager';
 import { Terrain } from '../world/Terrain';
+import { Iceberg } from '../world/Iceberg';
 import { Player } from '../player/Player';
 import { InputManager } from '../input/InputManager';
+
+const ICEBERG_URL = `${import.meta.env.BASE_URL}assets/models/SM_Iceberg_L_A.glb`;
+
+// Placed off to one side of the spawn point, well inside the 100m terrain
+// tile, so it's visible early without blocking the player's starting path.
+const ICEBERG_X = 18;
+const ICEBERG_Z = -14;
 
 /**
  * Top-level orchestrator: owns the renderer/scene/camera and wires the
@@ -18,16 +26,26 @@ export class Game {
   private readonly player: Player;
 
   /**
-   * The terrain GLB is fetched before the Game exists, so every field can
-   * be assigned once and the loop never runs against a half-built world.
+   * World assets are fetched before the Game exists, so every field can be
+   * assigned once and the loop never runs against a half-built world.
    */
   static async create(container: HTMLElement): Promise<Game> {
-    return new Game(container, await Terrain.load());
+    const terrain = await Terrain.load();
+
+    const iceberg = await Iceberg.load(ICEBERG_URL, {
+      x: ICEBERG_X,
+      z: ICEBERG_Z,
+      groundY: terrain.sampleHeight(ICEBERG_X, ICEBERG_Z) ?? 0,
+      rotationY: 0.5,
+    });
+
+    return new Game(container, terrain, [iceberg]);
   }
 
-  private constructor(container: HTMLElement, terrain: Terrain) {
+  private constructor(container: HTMLElement, terrain: Terrain, icebergs: readonly Iceberg[]) {
     this.scene = createScene();
     this.scene.add(terrain.root);
+    for (const iceberg of icebergs) this.scene.add(iceberg.root);
 
     this.camera = new THREE.PerspectiveCamera(
       75,
@@ -48,7 +66,7 @@ export class Game {
     container.appendChild(this.renderer.domElement);
 
     this.input = new InputManager(this.renderer.domElement);
-    this.player = new Player(this.scene, this.camera, terrain);
+    this.player = new Player(this.scene, this.camera, terrain, icebergs);
 
     window.addEventListener('resize', this.onResize);
   }
