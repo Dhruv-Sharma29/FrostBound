@@ -1,75 +1,108 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { GroundSampler } from './GroundSampler';
 import { createSnowMaterial } from './SnowMaterial';
-
-// Public-directory asset, so it's referenced by URL rather than imported.
-// BASE_URL keeps it correct if the game is ever served from a sub-path.
-const TERRAIN_URL = `${import.meta.env.BASE_URL}assets/environment/terrain/SM_Terrain_Snow_A.glb`;
+import { TerrainPiece, type TerrainType } from './TerrainPiece';
 
 const DOWN = new THREE.Vector3(0, -1, 0);
 const RAY_CLEARANCE = 10;
 
+/** Grid resolution used when seating a tile onto the ground already placed. */
+const SEAT_SAMPLES = 9;
+
+export interface TerrainSpawn {
+  type: TerrainType;
+  x: number;
+  z: number;
+  rotationY?: number;
+  scale?: number;
+  /**
+   * Fixed height for the tile's origin. Omit to seat it onto the ground placed
+   * before it — which is what "ground alignment" means for terrain.
+   */
+  groundY?: number;
+}
+
 /**
- * The snow terrain, loaded from a GLB at its authored scale — no scaling
- * or reorientation is applied, so it stays undistorted.
+ * The walkable landscape: several terrain tiles composed into one ground.
  *
- * Terrain also serves as the ground-height source for anything that walks
- * on it (see GroundSampler), because the mesh itself is the only authority
- * on where the surface is.
+ * Terrain stays the single GroundSampler the player is given, so adding tiles
+ * never reaches into movement code — it just has more surfaces to raycast.
+ * One raycast serves the whole field: hits come back sorted by distance, so a
+ * tile stacked on the base ground is simply the first thing the downward ray
+ * meets, and standing on the topmost surface falls out for free.
  */
 export class Terrain implements GroundSampler {
-  readonly root: THREE.Object3D;
+  /** Every tile under one node, so the scene still takes a single object. */
+  readonly root = new THREE.Group();
 
-  private readonly surfaces: THREE.Mesh[];
+  private readonly surfaces: THREE.Mesh[] = [];
   private readonly raycaster = new THREE.Raycaster();
   private readonly rayOrigin = new THREE.Vector3();
-  /** Rays start above the highest point so they always hit from outside. */
-  private readonly rayHeight: number;
+  /** Rays start above the highest tile so they always hit from outside. */
+  private rayHeight = RAY_CLEARANCE;
 
-  private constructor(root: THREE.Object3D, surfaces: THREE.Mesh[]) {
-    this.root = root;
-    this.surfaces = surfaces;
-    this.rayHeight = new THREE.Box3().setFromObject(root).max.y + RAY_CLEARANCE;
+  /**
+   * Loads and places a layout. Every GLB is fetched in parallel, then tiles are
+   * placed in order, because seating a tile means sampling the ground already
+   * standing — so the base ground has to come first in the layout.
+   */
+  static async load(layout: readonly TerrainSpawn[]): Promise<Terrain> {
+    // One material instance shared by every tile: one compiled shader, and one
+    // place to change how all snow reads.
+    const snow = createSnowMaterial();
+    const pieces = await Promise.all(layout.map((spawn) => TerrainPiece.load(spawn.type, snow)));
+
+    const terrain = new Terrain();
+
+    pieces.forEach((piece, index) => {
+      const spawn = layout[index];
+      const footprint = piece.halfExtent * (spawn.scale ?? 1);
+
+      piece.place({
+        x: spawn.x,
+        z: spawn.z,
+        rotationY: spawn.rotationY,
+        scale: spawn.scale,
+        groundY: spawn.groundY ?? terrain.lowestGroundUnder(spawn.x, spawn.z, footprint),
+      });
+
+      terrain.add(piece);
+    });
+
+    return terrain;
+  }
+
+  private add(piece: TerrainPiece): void {
+    this.root.add(piece.root);
+    this.surfaces.push(...piece.surfaces);
+
+    const top = new THREE.Box3().setFromObject(piece.root).max.y;
+    this.rayHeight = Math.max(this.rayHeight, top + RAY_CLEARANCE);
   }
 
   /**
-   * Resolves once the terrain is ready to be added to a scene. The game
-   * waits on this so the world is never rendered — or walked on — before
-   * there is ground.
+   * Lowest ground under a tile's footprint, or 0 where nothing is placed yet.
+   *
+   * The low point rather than the centre: these tiles have a flat rim, so
+   * seating one on undulating ground has to pick a side to be wrong on.
+   * Sinking the rim below the surrounding surface hides it, while lifting it
+   * above leaves a floating ledge — so the tile is dropped to the lowest point
+   * it spans and the base ground is allowed to swallow the rest.
    */
-  static async load(): Promise<Terrain> {
-    const gltf = await new GLTFLoader().loadAsync(TERRAIN_URL);
-    const surfaces: THREE.Mesh[] = [];
-    const snow = createSnowMaterial();
+  private lowestGroundUnder(x: number, z: number, radius: number): number {
+    let lowest = Infinity;
 
-    gltf.scene.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
+    for (let ix = 0; ix < SEAT_SAMPLES; ix++) {
+      for (let iz = 0; iz < SEAT_SAMPLES; iz++) {
+        const u = (ix / (SEAT_SAMPLES - 1)) * 2 - 1;
+        const v = (iz / (SEAT_SAMPLES - 1)) * 2 - 1;
 
-      // The asset ships POSITION only, leaving nothing to shade with, and
-      // GLTFLoader's fallback (flat shading off screen-space derivatives)
-      // misfires on large near-camera triangles.
-      if (!object.geometry.getAttribute('normal')) {
-        object.geometry.computeVertexNormals();
+        const height = this.sampleHeight(x + u * radius, z + v * radius);
+        if (height !== null) lowest = Math.min(lowest, height);
       }
-
-      // Swap the authored material for the shared snow look, so the terrain
-      // and later snow assets stay consistent from one definition.
-      for (const authored of Array.isArray(object.material) ? object.material : [object.material]) {
-        authored.dispose();
-      }
-      object.material = snow;
-
-      object.castShadow = true;
-      object.receiveShadow = true;
-      surfaces.push(object);
-    });
-
-    if (surfaces.length === 0) {
-      throw new Error(`Terrain asset contains no meshes: ${TERRAIN_URL}`);
     }
 
-    return new Terrain(gltf.scene, surfaces);
+    return lowest === Infinity ? 0 : lowest;
   }
 
   sampleHeight(x: number, z: number): number | null {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { InputManager } from '../input/InputManager';
 import type { GroundSampler } from '../world/GroundSampler';
+import type { CollisionVolume } from '../world/CollisionVolume';
 import { PLAYER_BODY_LAYER } from '../core/layers';
 
 const EYE_HEIGHT = 1.6;
@@ -29,9 +30,16 @@ export class Player {
   private readonly yawObject = new THREE.Object3D();
   private readonly pitchObject = new THREE.Object3D();
   private readonly ground: GroundSampler;
+  private readonly obstacles: readonly CollisionVolume[];
 
-  constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, ground: GroundSampler) {
+  constructor(
+    scene: THREE.Scene,
+    camera: THREE.PerspectiveCamera,
+    ground: GroundSampler,
+    obstacles: readonly CollisionVolume[] = [],
+  ) {
     this.ground = ground;
+    this.obstacles = obstacles;
 
     // Spawn standing on the surface rather than at an assumed height —
     // the terrain's elevation at the spawn point isn't known up front.
@@ -92,6 +100,10 @@ export class Player {
     const distance = MOVE_SPEED * delta;
     const nextX = this.yawObject.position.x + direction.x * distance;
     const nextZ = this.yawObject.position.z + direction.z * distance;
+
+    // Same "refuse the step" policy as running off the terrain: no sliding
+    // or push-back, just a hard stop at any obstacle's footprint.
+    if (this.obstacles.some((obstacle) => obstacle.blocks(nextX, nextZ))) return;
 
     // Walking is a horizontal step plus a snap onto whatever surface is
     // below it. No falling body is simulated, so the step is simply

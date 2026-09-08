@@ -15,11 +15,16 @@ export const SNOW_BASE_COLOR = 0xe3edfa;
  * Snow is a rough dielectric: no metalness and maximum roughness, which
  * keeps it matte and lets the cool sky fill read as blue shading on slopes
  * facing away from the sun.
+ *
+ * vertexColors is on so TerrainShading's per-vertex tint can multiply the
+ * base colour — without it, relief only reads via the sun's exact angle on
+ * each surface, which flattens out to pure white on gentler terrain.
  */
 export function createSnowMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: SNOW_BASE_COLOR,
     roughness: 1,
     metalness: 0,
+    vertexColors: true,
   });
 }
