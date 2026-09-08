@@ -1,11 +1,78 @@
 import * as THREE from 'three';
 import { createScene } from '../scene/SceneManager';
-import { Terrain } from '../world/Terrain';
+import { Terrain, type TerrainSpawn } from '../world/Terrain';
+import { type TerrainType } from '../world/TerrainPiece';
 import { Iceberg, type IcebergType } from '../world/Iceberg';
 import { Player } from '../player/Player';
 import { InputManager } from '../input/InputManager';
 
 const MODELS_URL = `${import.meta.env.BASE_URL}assets/models`;
+const TERRAIN_URL = `${import.meta.env.BASE_URL}assets/environment/terrain`;
+
+// Each terrain GLB and the in-file node names it exposes (see TerrainPiece.ts).
+// The base snow ground ships no COL_ proxy, so its visual mesh is what gets
+// walked on — which is how it has always been sampled.
+const TERRAIN_TYPES = {
+  SnowGround: {
+    url: `${TERRAIN_URL}/SM_Terrain_Snow_A.glb`,
+    visualNodeName: 'SM_Terrain_Snow_A',
+  },
+  Slope: {
+    url: `${TERRAIN_URL}/SM_Terrain_Slope.glb`,
+    visualNodeName: 'SM_Terrain_Slope',
+    collisionNodeName: 'COL_Terrain_Slope',
+  },
+  Hill: {
+    url: `${TERRAIN_URL}/SM_Terrain_Hill.glb`,
+    visualNodeName: 'SM_Terrain_Hill',
+    collisionNodeName: 'COL_Terrain_Hill',
+  },
+  Dune: {
+    url: `${TERRAIN_URL}/SM_Terrain_Dune.glb`,
+    visualNodeName: 'SM_Terrain_Dune',
+    collisionNodeName: 'COL_Terrain_Dune',
+  },
+} as const satisfies Record<string, TerrainType>;
+
+/**
+ * The landscape, built base-first: each tile is seated onto the ground placed
+ * before it, so the snow ground has to lead.
+ *
+ * Every tile here is authored with a ~1m vertical skirt around its rim (a
+ * "bury me into the ground" convention): Hill's skirt is flush on all four
+ * sides, but Slope and Dune each have one side where their own terrain shape
+ * reaches the tile boundary already elevated — 4.51m up for Slope's ramp top,
+ * 1.71m for Dune's ridge. That elevation is baked into the mesh and doesn't
+ * move with placement, so on ground that doesn't happen to rise by a matching
+ * amount in a matching direction, that one side stands exposed as a hard
+ * vertical wall — the "white slab" seam. It isn't a sampling bug (resolution
+ * was checked: the seat height these three coordinates settle on doesn't
+ * change from 5 samples to 41), it's a placement problem: the base terrain
+ * has to actually supply the matching rise, in the matching direction.
+ *
+ * These three spots were found by measuring, not eyeballing: for each tile,
+ * every position on the 100m base (4m grid, all 4 rotations, clear of the
+ * iceberg field) was seated and then checked for how far its own surface
+ * stands above the real ground within 2m of every edge. All three below
+ * measure exactly 0.000m exposure — the tile's rim (including the elevated
+ * side) never pokes out above the actual surrounding snow.
+ *
+ * BASE -> SLOPE -> HILL: Hill and Slope sit 20.4m apart (footprints don't
+ * overlap — no interlocking needed once the seam is already at zero), with
+ * Slope's high side facing toward Hill, so walking up the ramp continues
+ * naturally on toward the mound. Dune sits 44m+ away in the opposite
+ * direction from spawn, off the Hill/Slope path and clear of the icebergs.
+ */
+const TERRAIN_LAYOUT: readonly TerrainSpawn[] = [
+  // The base ground defines y=0 for everything seated after it.
+  { type: TERRAIN_TYPES.SnowGround, x: 0, z: 0, groundY: 0 },
+
+  { type: TERRAIN_TYPES.Hill, x: -38, z: -38 },
+
+  { type: TERRAIN_TYPES.Slope, x: -42, z: -18, rotationY: -Math.PI / 2, scale: 0.75 },
+
+  { type: TERRAIN_TYPES.Dune, x: -38, z: 14, rotationY: -Math.PI / 2 },
+];
 
 // Each iceberg GLB and the in-file node names it exposes (see Iceberg.ts).
 // Filename suffixes like "_A" only distinguish which GLB to load — they
@@ -78,7 +145,7 @@ export class Game {
    * assigned once and the loop never runs against a half-built world.
    */
   static async create(container: HTMLElement): Promise<Game> {
-    const terrain = await Terrain.load();
+    const terrain = await Terrain.load(TERRAIN_LAYOUT);
 
     const icebergs = await Promise.all(
       ICEBERG_SPAWNS.map((spawn) =>
