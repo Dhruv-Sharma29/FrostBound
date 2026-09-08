@@ -46,9 +46,9 @@ export class Terrain implements GroundSampler {
     gltf.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
 
-      // The asset ships POSITION only, leaving nothing to shade with, and
-      // GLTFLoader's fallback (flat shading off screen-space derivatives)
-      // misfires on large near-camera triangles.
+      // The asset ships authored normals, but keep the fallback: GLTFLoader's
+      // own (flat shading off screen-space derivatives) misfires on large
+      // near-camera triangles, so compute them rather than let it guess.
       if (!object.geometry.getAttribute('normal')) {
         object.geometry.computeVertexNormals();
       }

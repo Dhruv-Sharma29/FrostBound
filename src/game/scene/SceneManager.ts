@@ -4,7 +4,10 @@ import { createSky, HAZE_COLOR } from './Sky';
 
 /** Half-width of the sun's shadow box; covers the terrain's 100m diagonal. */
 const SHADOW_EXTENT = 80;
-const FOG_DENSITY = 0.0075;
+// Tuned so the far icebergs (~50m out) sit back in noticeable haze while
+// anything within ~20m stays essentially clear — aerial perspective for
+// depth, without the field turning into soup.
+const FOG_DENSITY = 0.0105;
 
 /**
  * Builds the base THREE.Scene: sky, fog and lighting.
@@ -26,7 +29,16 @@ export function createScene(): THREE.Scene {
   // elevation (~13°) that same 9° of slope swings the diffuse term roughly 6x,
   // which is what makes the undulations legible. Intensity is high to
   // compensate: grazing light delivers little energy to flat ground.
-  const sun = new THREE.DirectionalLight(0xfff4e2, 16.0);
+  // Intensity was 16 when flat terrain was the only thing lit: ground at this
+  // elevation only catches sin(13°) of it, so the number had to be large. The
+  // icebergs changed that — a vertical wall facing the sun catches cos(13°),
+  // nearly 5x what the ground does, which at 16 landed far above white and
+  // clipped every sunlit face into a flat silhouette. Lowering it puts those
+  // walls back inside the tone mapper's usable range. The ground keeps its
+  // relief because that comes from the *ratio* between neighbouring slopes,
+  // which intensity does not change — and it reads better here, no longer
+  // compressed against white.
+  const sun = new THREE.DirectionalLight(0xfff4e2, 11.0);
   sun.position.set(75, 19, 38);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -47,9 +59,18 @@ export function createScene(): THREE.Scene {
   // hemisphere pair — cool from the sky, bright from the ground — which
   // keeps slopes facing away from the sun blue rather than black. A plain
   // ambient light at this strength flattened the shading instead.
-  const fill = new THREE.HemisphereLight(0x9ec6ea, 0xf2f7ff, 1.0);
+  const fill = new THREE.HemisphereLight(0x9ec6ea, 0xf2f7ff, 0.85);
 
-  scene.add(sun, fill);
+  // The icebergs introduced tall vertical faces, which the terrain never had.
+  // Under a 13° sun those either face the light and blow out, or face away and
+  // fall to the hemisphere term alone and read as flat dark shapes. This is
+  // the light the snow field bounces back into them: aimed low from the
+  // opposite side, weak, and shadowless, so it opens up the shaded faces
+  // without touching the sun's contrast on the ground.
+  const bounce = new THREE.DirectionalLight(0xc8dcf2, 0.9);
+  bounce.position.set(-70, 14, -30);
+
+  scene.add(sun, fill, bounce);
 
   return scene;
 }

@@ -1,16 +1,30 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { CollisionVolume } from './CollisionVolume';
-
-// The asset's in-file node names (not the "_A" variant suffix on the
-// filename — that only distinguishes which GLB to load).
-const VISUAL_NODE_NAME = 'SM_Iceberg_L';
-const COLLISION_NODE_NAME = 'COL_Iceberg_L';
+import { applyIceShading, getIceMaterial } from './IceMaterial';
 
 // The player is treated as a point on the ground (see Player.ts), so the
 // collider is padded by roughly the player's own radius — otherwise the
 // camera would visually clip into the ice before movement is refused.
 const COLLISION_MARGIN = 0.5;
+
+/** Frees the GPU resources of a subtree being dropped before it is ever drawn. */
+function disposeSubtree(object: THREE.Object3D): void {
+  object.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    node.geometry.dispose();
+    for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+      material.dispose();
+    }
+  });
+}
+
+/** One iceberg variant: its GLB and the in-file node names it exposes. */
+export interface IcebergType {
+  url: string;
+  visualNodeName: string;
+  collisionNodeName: string;
+}
 
 export interface IcebergPlacement {
   x: number;
@@ -40,21 +54,44 @@ export class Iceberg implements CollisionVolume {
     this.colliderRadiusSq = colliderRadiusSq;
   }
 
-  static async load(url: string, placement: IcebergPlacement): Promise<Iceberg> {
-    const gltf = await new GLTFLoader().loadAsync(url);
+  static async load(type: IcebergType, placement: IcebergPlacement): Promise<Iceberg> {
+    const gltf = await new GLTFLoader().loadAsync(type.url);
     const root = gltf.scene;
 
-    const visual = root.getObjectByName(VISUAL_NODE_NAME);
-    const collision = root.getObjectByName(COLLISION_NODE_NAME);
+    const visual = root.getObjectByName(type.visualNodeName);
+    const collision = root.getObjectByName(type.collisionNodeName);
 
-    if (!visual) throw new Error(`Iceberg asset is missing visual node "${VISUAL_NODE_NAME}": ${url}`);
-    if (!collision) throw new Error(`Iceberg asset is missing collision node "${COLLISION_NODE_NAME}": ${url}`);
+    if (!visual) throw new Error(`Iceberg asset is missing visual node "${type.visualNodeName}": ${type.url}`);
+    if (!collision) throw new Error(`Iceberg asset is missing collision node "${type.collisionNodeName}": ${type.url}`);
+
+    // Some GLBs ship more than the pair they are named for — SM_Iceberg_Peak
+    // also contains SM_Iceberg_S and COL_Iceberg_S. Adding the whole scene
+    // would render a second iceberg inside this one, along with its raw
+    // collision cylinder (only the matched collider gets hidden below), so
+    // anything outside the requested pair is dropped.
+    for (const child of [...root.children]) {
+      const wanted =
+        child.getObjectByName(type.visualNodeName) === visual ||
+        child.getObjectByName(type.collisionNodeName) === collision;
+      if (wanted) continue;
+
+      root.remove(child);
+      disposeSubtree(child);
+    }
 
     visual.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.castShadow = true;
-        object.receiveShadow = true;
+      if (!(object instanceof THREE.Mesh)) return;
+
+      // The kit's authored materials contradict each other between assets
+      // (see IceMaterial), so every iceberg is re-shaded from one definition.
+      for (const authored of Array.isArray(object.material) ? object.material : [object.material]) {
+        authored.dispose();
       }
+      object.geometry = applyIceShading(object.geometry);
+      object.material = getIceMaterial();
+
+      object.castShadow = true;
+      object.receiveShadow = true;
     });
 
     // Gameplay-only geometry; the low-poly collision proxy must never render.
